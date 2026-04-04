@@ -16,8 +16,13 @@ def predict():
 
         pred = pipeline.predict(data)[0]
         label = le.inverse_transform([pred])[0]
+        if label == "BENIGN":
+            final_label = "Normal"
+        else:
+            final_label = "Instrusion"
 
-        return jsonify({"prediction": label})
+        return jsonify({"prediction": final_label,
+                        "Description": label})
 
     except Exception as e:
         return jsonify({"error": str(e)})
