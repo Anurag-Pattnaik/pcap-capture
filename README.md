@@ -3,7 +3,7 @@
 ### 📥 1. Download Dataset
 
 * Open the link:
-  https://drive.proton.me/urls/KQM4B3EBE0#2yga3D5TlsNJ
+  https://drive.google.com/file/d/1F_0ZUcVap4OPr0Z1unpHa7sEFjz-37xR/view?usp=drive_link
 * Download all files
 * Extract (if zipped)
 
