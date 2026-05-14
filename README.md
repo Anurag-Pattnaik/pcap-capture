@@ -38,64 +38,42 @@ Open terminal in project folder:
 pip install -r requirements.txt
 ```
 
----
-
-### 🧠 4. Train Model (Jupyter Notebook)
-
-Run the notebook:
-
-```
-src/train.ipynb
-```
-
-Execute cells **in order (top to bottom):**
-
-1. Import libraries
-2. Load dataset (`data/raw/`)
-3. Data preprocessing
-4. Feature selection
-5. Train model
-6. Evaluate model
-7. Save model (`.pkl` file in models/)
-
----
-
-### ⚙️ 5. Run API
+### ⚙️ 4. Run FAST API
 
 Start backend API:
 
 ```
-python src/api.py
+uvicorn src.api:app --reload
+
 ```
 
 👉 This will load the trained model and start the server
 
 ---
 
-### 🔁 6. Run Simulation
+### 🔁 5. Run Real Time Data Capture
 
 In a new terminal:
 
 ```
-python src/simulate.py
+python real_time.py
 ```
 
 ---
 
-### 🧪 7. Test with Simulated Data
+### 🧪 6. Final Observation
 
-* Simulation script will:
+*Real Time Capture Script will :
 
-  * Generate/test network traffic data
+  * Capture real time data
   * Send requests to API
-  * Display predictions (Normal / Attack)
+  * Display predictions (BENIGN / MALICIOUS)
 
 ---
 
 ### ⚠️ Notes
 
 * Make sure dataset is placed correctly before training
-* Train model first before running API
 * Keep API running while simulation runs
 
 ---
