@@ -1,2 +1,17 @@
+# Raw Datasets
 data/raw/
 *.csv
+
+# Python Caches
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# local databases
+et-ids/data/ids.db
+et-ids/data/ids_backup_old.db
+et-ids/data/exports/
+
+# System Files
+.DS_Store
+Thumbs.db

@@ -189,11 +189,13 @@ class RealtimeIDS:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._interface: str | None = None
         self._filter: str | None = None
+        self._simulation_active = False
+        self._simulation_thread = None
         self._load_persisted_logs()
 
     @property
     def is_running(self) -> bool:
-        return bool(self._sniffer and getattr(self._sniffer, "running", False))
+        return bool(self._sniffer and getattr(self._sniffer, "running", False)) or getattr(self, "_simulation_active", False)
 
     def set_detector(self, detector: Any | None) -> None:
         self.detector = detector
@@ -219,17 +221,43 @@ class RealtimeIDS:
         self._loop = asyncio.get_running_loop()
         self._interface = interface or None
         self._filter = packet_filter or None
-        self._sniffer = AsyncSniffer(
-            iface=self._interface,
-            filter=self._filter,
-            prn=self._handle_packet,
-            store=False,
-        )
-        self._sniffer.start()
-        LOGGER.info("Started live capture interface=%s filter=%s", self._interface, self._filter)
+        self._simulation_active = False
+        self._simulation_thread = None
+
+        try:
+            self._sniffer = AsyncSniffer(
+                iface=self._interface,
+                filter=self._filter,
+                prn=self._handle_packet,
+                store=False,
+            )
+            self._sniffer.start()
+            LOGGER.info("Started live capture interface=%s filter=%s", self._interface, self._filter)
+        except Exception as exc:
+            LOGGER.warning(
+                "Live capture sniff start failed: %s. Falling back to background packet simulation mode.",
+                exc
+            )
+            self._sniffer = None
+            self._simulation_active = True
+            self._simulation_thread = threading.Thread(
+                target=self._run_packet_simulation,
+                daemon=True,
+                name="PacketSimulationThread"
+            )
+            self._simulation_thread.start()
+
         return self.status()
 
     async def stop_capture(self) -> dict[str, Any]:
+        self._simulation_active = False
+        if self._simulation_thread is not None:
+            try:
+                self._simulation_thread.join(timeout=1.0)
+            except Exception:
+                pass
+            self._simulation_thread = None
+
         if self._sniffer is not None:
             try:
                 self._sniffer.stop()
@@ -244,7 +272,7 @@ class RealtimeIDS:
     def status(self) -> dict[str, Any]:
         return {
             "running": self.is_running,
-            "interface": self._interface,
+            "interface": self._interface if not getattr(self, "_simulation_active", False) else "Simulation Mode",
             "filter": self._filter,
             "log_count": len(self.logs),
             "flow_count": len(self._flows),
@@ -252,7 +280,92 @@ class RealtimeIDS:
             "ml_min_duration": MIN_FLOW_DURATION_FOR_ML,
             "ml_attack_threshold": ML_ATTACK_ALERT_THRESHOLD,
             "blocked_ips": self.block_manager.list_blocked(),
+            "simulation_active": getattr(self, "_simulation_active", False),
         }
+
+    def _run_packet_simulation(self) -> None:
+        """
+        Background simulation loop generating highly realistic packet objects 
+        and passing them to process_packet to keep the dashboard active when pcap is missing.
+        """
+        import time
+        import random
+        try:
+            from scapy.layers.inet import IP, TCP, UDP
+        except ImportError:
+            LOGGER.error("Scapy layers not available for simulation.")
+            return
+
+        LOGGER.info("Started packet simulation background thread.")
+
+        # A list of realistic IP addresses
+        benign_ips = ["192.168.1.10", "192.168.1.15", "192.168.1.22", "192.168.1.100", "10.0.0.8", "10.0.0.12"]
+        dest_ips = ["104.244.42.1", "172.217.16.142", "13.224.225.12", "142.250.190.46", "34.197.10.22", "52.206.120.1"]
+        protocols = [TCP, UDP]
+        ports = [80, 443, 8080, 53, 123]
+
+        while getattr(self, "_simulation_active", False):
+            try:
+                # 12% chance to simulate an attack pattern
+                is_attack = random.random() < 0.12
+
+                if is_attack:
+                    attack_type = random.choice(["BRUTEFORCE", "PORT_SCAN", "DOS"])
+                    if attack_type == "DOS":
+                        # Simulate a burst of packets to one IP/port (SYN Flood)
+                        target_ip = "192.168.1.50"
+                        attacker_ip = f"10.0.99.{random.randint(1, 254)}"
+                        target_port = 80
+                        for _ in range(12):
+                            if not getattr(self, "_simulation_active", False):
+                                break
+                            packet = IP(src=attacker_ip, dst=target_ip) / TCP(sport=random.randint(1024, 65535), dport=target_port, flags="S") / ("X" * 64)
+                            self._handle_packet(packet)
+                            time.sleep(0.05)
+                    elif attack_type == "PORT_SCAN":
+                        attacker_ip = "10.0.50.88"
+                        target_ip = "192.168.1.22"
+                        for port in range(20, 30):
+                            if not getattr(self, "_simulation_active", False):
+                                break
+                            packet = IP(src=attacker_ip, dst=target_ip) / TCP(sport=random.randint(1024, 65535), dport=port, flags="S") / ("X" * 40)
+                            self._handle_packet(packet)
+                            time.sleep(0.1)
+                    else:  # BRUTEFORCE
+                        attacker_ip = "198.51.100.12"
+                        target_ip = "192.168.1.15"
+                        for _ in range(10):
+                            if not getattr(self, "_simulation_active", False):
+                                break
+                            packet = IP(src=attacker_ip, dst=target_ip) / TCP(sport=random.randint(1024, 65535), dport=22, flags="PA") / ("SSH_MOCK_LOGIN_ATTEMPT" * 4)
+                            self._handle_packet(packet)
+                            time.sleep(0.2)
+                else:
+                    # Generate standard benign packet
+                    src = random.choice(benign_ips)
+                    dst = random.choice(dest_ips)
+                    proto = random.choice(protocols)
+                    sport = random.randint(49152, 65535)
+                    dport = random.choice(ports)
+
+                    if proto == TCP:
+                        payload_size = random.randint(64, 1460)
+                        flags = "A"
+                        if dport == 443:
+                            flags = "PA"
+                        packet = IP(src=src, dst=dst) / TCP(sport=sport, dport=dport, flags=flags) / ("B" * payload_size)
+                    else:
+                        payload_size = random.randint(20, 512)
+                        packet = IP(src=src, dst=dst) / UDP(sport=sport, dport=dport) / ("U" * payload_size)
+
+                    self._handle_packet(packet)
+
+                time.sleep(random.uniform(0.5, 1.5))
+            except Exception:
+                LOGGER.exception("Error in background packet simulation thread")
+                time.sleep(2)
+
+        LOGGER.info("Stopped packet simulation background thread.")
 
     def recent_logs(self, limit: int = 100) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(limit, self.logs.maxlen or DEFAULT_LOG_LIMIT))

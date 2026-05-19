@@ -51,6 +51,41 @@ def _coerce_feature_frame(features: Mapping[str, Any]) -> pd.DataFrame:
     return pd.DataFrame([dict(features)])
 
 
+def _scale_features_for_inference(features: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    Scale real-time flow features to match the exact units and scale 
+    used during model training (which is primarily based on CICIDS-2017 microseconds).
+    
+    1. Scale flow_duration and iat from seconds to microseconds.
+    2. Set flow_rate to true packets per second.
+    3. Scale engineered rates (packets_per_second, byte_rate) to be per-microsecond.
+    """
+    scaled = dict(features)
+    
+    flow_duration_sec = float(features.get("flow_duration") or 0.0)
+    iat_sec = float(features.get("iat") or 0.0)
+    
+    flow_duration_us = flow_duration_sec * 1_000_000.0
+    iat_us = iat_sec * 1_000_000.0
+    
+    scaled["flow_duration"] = flow_duration_us
+    scaled["iat"] = iat_us
+    
+    total_packets = int(features.get("total_packets") or 0)
+    packets_per_second_real = total_packets / (flow_duration_sec + 1e-6)
+    scaled["flow_rate"] = packets_per_second_real
+    
+    total_bytes = int(features.get("total_bytes") or 0)
+    scaled["packets_per_second"] = total_packets / (flow_duration_us + 1e-6)
+    scaled["byte_rate"] = total_bytes / (flow_duration_us + 1e-6)
+    
+    # avg_packet_size is total_bytes / total_packets
+    if "avg_packet_size" not in scaled or scaled["avg_packet_size"] == 0.0:
+        scaled["avg_packet_size"] = total_bytes / (total_packets + 1e-6)
+        
+    return scaled
+
+
 class IntrusionDetector:
     def __init__(
         self,
@@ -107,7 +142,8 @@ class IntrusionDetector:
         return str(raw_prediction)
 
     def predict(self, features: Mapping[str, Any]) -> str:
-        model_input = self._prepare_input(features)
+        scaled = _scale_features_for_inference(features)
+        model_input = self._prepare_input(scaled)
         raw_prediction = self.model.predict(model_input)[0]
         prediction = self._decode_prediction(raw_prediction)
 
@@ -119,7 +155,8 @@ class IntrusionDetector:
         return prediction
 
     def predict_details(self, features: Mapping[str, Any]) -> DetectionResult:
-        prediction = self.predict(features)
+        scaled = _scale_features_for_inference(features)
+        prediction = self.predict(scaled)  # predict already does scaling so we pass scaled
         normalized_prediction = prediction.strip().lower()
         is_benign = normalized_prediction in {"benign", "normal"}
         return DetectionResult(
@@ -237,7 +274,8 @@ class TwoStageIntrusionDetector:
         return self.predict_details(features).prediction
 
     def predict_details(self, features: Mapping[str, Any]) -> DetectionResult:
-        model_input = self._prepare_input(features)
+        scaled = _scale_features_for_inference(features)
+        model_input = self._prepare_input(scaled)
         binary_raw = self.binary_model.predict(model_input)[0]
         binary_label = self._decode(self.binary_label_encoder, binary_raw)
         binary_confidence = self._confidence(self.binary_model, model_input)
